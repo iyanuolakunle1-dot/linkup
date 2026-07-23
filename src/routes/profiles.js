@@ -4,7 +4,7 @@ import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
-// GET /api/profiles - list all profiles (for "Online Users" panel)
+// GET /api/profiles
 router.get("/", requireAuth, async (req, res) => {
   const { data, error } = await supabase
     .from("profiles")
@@ -12,10 +12,11 @@ router.get("/", requireAuth, async (req, res) => {
     .order("status", { ascending: true });
 
   if (error) return res.status(500).json({ error: error.message });
+
   res.json(data);
 });
 
-// GET /api/profiles/me - current user's profile
+// GET /api/profiles/me
 router.get("/me", requireAuth, async (req, res) => {
   const { data, error } = await supabase
     .from("profiles")
@@ -24,10 +25,11 @@ router.get("/me", requireAuth, async (req, res) => {
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
+
   res.json(data);
 });
 
-// GET /api/profiles/:id - single profile
+// GET /api/profiles/:id
 router.get("/:id", requireAuth, async (req, res) => {
   const { data, error } = await supabase
     .from("profiles")
@@ -36,10 +38,11 @@ router.get("/:id", requireAuth, async (req, res) => {
     .single();
 
   if (error) return res.status(404).json({ error: "Profile not found" });
+
   res.json(data);
 });
 
-// PATCH /api/profiles/me - update own profile
+// PATCH /api/profiles/me
 router.patch("/me", requireAuth, async (req, res) => {
   const { full_name, bio, role, avatar_color } = req.body;
 
@@ -57,10 +60,11 @@ router.patch("/me", requireAuth, async (req, res) => {
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
+
   res.json(data);
 });
 
-// PATCH /api/profiles/me/status - update online/away/offline
+// PATCH /api/profiles/me/status
 router.patch("/me/status", requireAuth, async (req, res) => {
   const { status } = req.body;
 
@@ -76,6 +80,7 @@ router.patch("/me/status", requireAuth, async (req, res) => {
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
+
   res.json(data);
 });
 
