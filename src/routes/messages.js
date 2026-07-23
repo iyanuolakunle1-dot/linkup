@@ -24,6 +24,14 @@ router.get("/:channelId", requireAuth, async (req, res) => {
         username,
         full_name,
         avatar_color
+      ),
+      attachments (
+        id,
+        message_id,
+        message_type,
+        url,
+        file_type,
+        file_name
       )
     `)
     .eq("channel_id", req.params.channelId)
@@ -41,7 +49,7 @@ router.get("/:channelId", requireAuth, async (req, res) => {
 
   if(error){
     return res.status(500).json({
-      error:error.message
+      error: error.message
     });
   }
 
@@ -49,7 +57,6 @@ router.get("/:channelId", requireAuth, async (req, res) => {
   res.json(messages.reverse());
 
 });
-
 
 
 
