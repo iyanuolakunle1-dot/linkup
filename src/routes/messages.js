@@ -69,18 +69,54 @@ router.post("/:channelId", requireAuth, async(req,res)=>{
     ? req.body.content.trim()
     : "";
 
+  const attachmentsData = req.body.attachments || [];
 
-  const {data,error}=await supabase
+  // 1. Insert the message first to generate the real database UUID
+  const {data: message, error: messageError} = await supabase
     .from("messages")
     .insert({
-      channel_id:req.params.channelId,
-      sender_id:req.user.id,
+      channel_id: req.params.channelId,
+      sender_id: req.user.id,
       content
     })
+    .select()
+    .single();
+
+  if(messageError){
+    return res.status(500).json({
+      error: messageError.message
+    });
+  }
+
+  // 2. If there are attachments, insert them using the new message's real id
+  if (attachmentsData.length > 0) {
+    const formattedAttachments = attachmentsData.map(att => ({
+      message_id: message.id, // Securely mapped to the real parent message ID
+      message_type: att.message_type || "channel",
+      url: att.url,
+      file_type: att.file_type,
+      file_name: att.file_name
+    }));
+
+    const { error: attError } = await supabase
+      .from("attachments")
+      .insert(formattedAttachments);
+
+    if (attError) {
+      return res.status(500).json({
+        error: attError.message
+      });
+    }
+  }
+
+  // 3. Fetch and return the fully populated message with sender profiles and attachments
+  const {data, error} = await supabase
+    .from("messages")
     .select(`
       id,
       content,
       created_at,
+      edited_at,
       sender:profiles!messages_sender_id_fkey (
         id,
         username,
@@ -96,20 +132,18 @@ router.post("/:channelId", requireAuth, async(req,res)=>{
         file_name
       )
     `)
+    .eq("id", message.id)
     .single();
-
 
   if(error){
     return res.status(500).json({
-      error:error.message
+      error: error.message
     });
   }
-
 
   res.status(201).json(data);
 
 });
-
 
 
 
