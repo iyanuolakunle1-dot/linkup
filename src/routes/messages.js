@@ -58,6 +58,8 @@ router.get("/:channelId", requireAuth, async (req, res) => {
 
 });
 
+
+
 // SEND CHANNEL MESSAGE
 // /api/messages/:channelId
 router.post("/:channelId", requireAuth, async(req,res)=>{
@@ -92,48 +94,6 @@ router.post("/:channelId", requireAuth, async(req,res)=>{
         url,
         file_type,
         file_name
-      )
-    `)
-    .single();
-
-
-  if(error){
-    return res.status(500).json({
-      error:error.message
-    });
-  }
-
-
-  res.status(201).json(data);
-
-});
-
-// SEND CHANNEL MESSAGE
-// /api/messages/:channelId
-router.post("/:channelId", requireAuth, async(req,res)=>{
-
-  const content =
-    typeof req.body.content === "string"
-    ? req.body.content.trim()
-    : "";
-
-
-  const {data,error}=await supabase
-    .from("messages")
-    .insert({
-      channel_id:req.params.channelId,
-      sender_id:req.user.id,
-      content
-    })
-    .select(`
-      id,
-      content,
-      created_at,
-      sender:profiles!messages_sender_id_fkey (
-        id,
-        username,
-        full_name,
-        avatar_color
       )
     `)
     .single();
