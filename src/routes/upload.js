@@ -33,16 +33,27 @@ async function handleUpload(req, res) {
     return res.status(400).json({ error: "No file provided" });
   }
 
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   const file = req.file;
   const isImage = file.mimetype.startsWith("image/");
   const isAudio = file.mimetype.startsWith("audio/");
+  const isVideo = file.mimetype.startsWith("video/");
+  
+  // Choose safe resource type
+  let resourceType = "auto";
+  if (isImage) resourceType = "image";
+  else if (isAudio || isVideo) resourceType = "video";
+  else resourceType = "raw"; // Safely handle docs, pdfs, zips, etc.
 
   try {
     const result = await uploadBufferToCloudinary(
       file.buffer,
       {
         folder: `chat-app/${req.user.id}`,
-        resource_type: isImage ? "image" : isAudio ? "video" : "auto",
+        resource_type: resourceType,
         public_id: `${Date.now()}-${Math.random().toString(36).slice(2)}`
       }
     );
@@ -55,7 +66,7 @@ async function handleUpload(req, res) {
     });
   } catch (err) {
     console.error("Cloudinary upload failed:", err);
-    return res.status(500).json({ error: "Upload failed" });
+    return res.status(500).json({ error: err.message || "Upload failed" });
   }
 }
 
