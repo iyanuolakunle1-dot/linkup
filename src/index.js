@@ -16,12 +16,13 @@ const app = express();
 
 const allowedOrigins = [
   "http://localhost:5173",
+  "http://localhost:5174",
   process.env.CLIENT_URL,
 ];
 
 app.use(
   cors({
-    origin: true, // Allows all origins dynamically
+    origin: true,
     credentials: true,
   })
 );
@@ -32,10 +33,11 @@ app.use(express.json());
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
+    timestamp: new Date().toISOString()
   });
 });
 
-// Routes
+// Routes - Make sure all are prefixed with /api
 app.use("/api/channels", channelsRouter);
 app.use("/api/messages", messagesRouter);
 app.use("/api/dm", dmRouter);
@@ -49,4 +51,6 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`📁 Upload route: http://localhost:${PORT}/api/upload`);
+  console.log(`🖼️  Avatar upload: http://localhost:${PORT}/api/upload/avatar`);
 });

@@ -28,6 +28,79 @@ function uploadBufferToCloudinary(buffer, options) {
   });
 }
 
+// AVATAR UPLOAD ROUTE
+router.post("/avatar", requireAuth, upload.single("file"), async (req, res) => {
+  try {
+    console.log("Avatar upload request received");
+    
+    if (!req.file) {
+      console.log("No file provided");
+      return res.status(400).json({ error: "No file provided" });
+    }
+
+    console.log("File received:", req.file.originalname, req.file.mimetype);
+
+    if (!req.user || !req.user.id) {
+      console.log("No user found");
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const file = req.file;
+    if (!file.mimetype.startsWith("image/")) {
+      console.log("Not an image file");
+      return res.status(400).json({ error: "Only image files are allowed" });
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      console.log("File too large");
+      return res.status(400).json({ error: "Image must be less than 5MB" });
+    }
+
+    console.log("Uploading to Cloudinary...");
+    const result = await uploadBufferToCloudinary(
+      file.buffer,
+      {
+        folder: `chat-app/avatars/${req.user.id}`,
+        resource_type: "image",
+        public_id: `avatar-${Date.now()}`,
+        transformation: [
+          { width: 300, height: 300, crop: "fill", gravity: "face" }
+        ]
+      }
+    );
+
+    console.log("Cloudinary upload successful:", result.secure_url);
+
+    // Update user profile with avatar URL
+    const { data: updatedProfile, error: updateError } = await supabase
+      .from("profiles")
+      .update({ avatar_url: result.secure_url })
+      .eq("id", req.user.id)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error("Supabase update error:", updateError);
+      return res.status(500).json({ error: "Failed to update profile" });
+    }
+
+    console.log("Profile updated successfully");
+
+    return res.status(201).json({
+      url: result.secure_url,
+      publicId: result.public_id,
+      profile: updatedProfile
+    });
+  } catch (err) {
+    console.error("Avatar upload error:", err);
+    return res.status(500).json({ 
+      error: err.message || "Upload failed",
+      details: err.stack 
+    });
+  }
+});
+
+// Regular file upload
 async function handleUpload(req, res) {
   if (!req.file) {
     return res.status(400).json({ error: "No file provided" });
@@ -42,11 +115,10 @@ async function handleUpload(req, res) {
   const isAudio = file.mimetype.startsWith("audio/");
   const isVideo = file.mimetype.startsWith("video/");
   
-  // Choose safe resource type
   let resourceType = "auto";
   if (isImage) resourceType = "image";
   else if (isAudio || isVideo) resourceType = "video";
-  else resourceType = "raw"; // Safely handle docs, pdfs, zips, etc.
+  else resourceType = "raw";
 
   try {
     const result = await uploadBufferToCloudinary(
@@ -70,10 +142,11 @@ async function handleUpload(req, res) {
   }
 }
 
-// Handle both / and empty string to prevent 404 trailing slash errors
+// Regular file upload routes
 router.post("/", requireAuth, upload.single("file"), handleUpload);
 router.post("", requireAuth, upload.single("file"), handleUpload);
 
+// Attach file to message
 router.post("/attach", requireAuth, async (req, res) => {
   try {
     const { message_id, message_type, url, file_type, file_name } = req.body;
@@ -101,43 +174,8 @@ router.post("/attach", requireAuth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// Add avatar upload route
-router.post("/avatar", requireAuth, upload.single("file"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No file provided" });
-  }
 
-  if (!req.user || !req.user.id) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  const file = req.file;
-  if (!file.mimetype.startsWith("image/")) {
-    return res.status(400).json({ error: "Only image files are allowed" });
-  }
-
-  try {
-    const result = await uploadBufferToCloudinary(
-      file.buffer,
-      {
-        folder: `chat-app/avatars/${req.user.id}`,
-        resource_type: "image",
-        public_id: `avatar-${Date.now()}`,
-        transformation: [{ width: 300, height: 300, crop: "fill" }]
-      }
-    );
-
-    return res.status(201).json({
-      url: result.secure_url,
-      publicId: result.public_id
-    });
-  } catch (err) {
-    console.error("Avatar upload failed:", err);
-    return res.status(500).json({ error: err.message || "Upload failed" });
-  }
-});
-
-// DELETE /api/upload/:publicId
+// Delete upload
 router.delete(
   "/:publicId(*)",
   requireAuth,

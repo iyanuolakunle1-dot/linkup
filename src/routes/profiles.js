@@ -8,7 +8,7 @@ const router = express.Router();
 router.get("/", requireAuth, async (req, res) => {
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, full_name, avatar_color, role, bio, status")
+    .select("id, username, full_name, avatar_color, role, bio, status, avatar_url, created_at")
     .order("status", { ascending: true });
 
   if (error) return res.status(500).json({ error: error.message });
@@ -33,7 +33,7 @@ router.get("/me", requireAuth, async (req, res) => {
 router.get("/:id", requireAuth, async (req, res) => {
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, full_name, avatar_color, role, bio, status")
+    .select("id, username, full_name, avatar_color, role, bio, status, avatar_url, created_at")
     .eq("id", req.params.id)
     .single();
 
@@ -44,17 +44,21 @@ router.get("/:id", requireAuth, async (req, res) => {
 
 // PATCH /api/profiles/me
 router.patch("/me", requireAuth, async (req, res) => {
-  const { full_name, bio, role, avatar_color } = req.body;
+  const { full_name, bio, role, avatar_color, avatar_url, username } = req.body;
+
+  const updateData = {
+    ...(full_name !== undefined && { full_name }),
+    ...(bio !== undefined && { bio }),
+    ...(role !== undefined && { role }),
+    ...(avatar_color !== undefined && { avatar_color }),
+    ...(avatar_url !== undefined && { avatar_url }),
+    ...(username !== undefined && { username }),
+    updated_at: new Date().toISOString(),
+  };
 
   const { data, error } = await supabase
     .from("profiles")
-    .update({
-      ...(full_name && { full_name }),
-      ...(bio !== undefined && { bio }),
-      ...(role !== undefined && { role }),
-      ...(avatar_color && { avatar_color }),
-      updated_at: new Date().toISOString(),
-    })
+    .update(updateData)
     .eq("id", req.user.id)
     .select()
     .single();
