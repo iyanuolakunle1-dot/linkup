@@ -101,6 +101,41 @@ router.post("/attach", requireAuth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// Add avatar upload route
+router.post("/avatar", requireAuth, upload.single("file"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No file provided" });
+  }
+
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const file = req.file;
+  if (!file.mimetype.startsWith("image/")) {
+    return res.status(400).json({ error: "Only image files are allowed" });
+  }
+
+  try {
+    const result = await uploadBufferToCloudinary(
+      file.buffer,
+      {
+        folder: `chat-app/avatars/${req.user.id}`,
+        resource_type: "image",
+        public_id: `avatar-${Date.now()}`,
+        transformation: [{ width: 300, height: 300, crop: "fill" }]
+      }
+    );
+
+    return res.status(201).json({
+      url: result.secure_url,
+      publicId: result.public_id
+    });
+  } catch (err) {
+    console.error("Avatar upload failed:", err);
+    return res.status(500).json({ error: err.message || "Upload failed" });
+  }
+});
 
 // DELETE /api/upload/:publicId
 router.delete(
