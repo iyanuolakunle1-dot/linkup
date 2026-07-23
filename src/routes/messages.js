@@ -4,278 +4,211 @@ import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
-
-// GET CHANNEL MESSAGES
-// /api/messages/:channelId
 router.get("/:channelId", requireAuth, async (req, res) => {
-
-  const limit = parseInt(req.query.limit) || 50;
-  const before = req.query.before;
-
-  let query = supabase
-    .from("messages")
-    .select(`
-      id,
-      content,
-      created_at,
-      edited_at,
-      sender:profiles!messages_sender_id_fkey (
+  try {
+    // 1. Fetch messages independently without any foreign table joins
+    const { data: messages, error } = await supabase
+      .from("messages")
+      .select(`
         id,
-        username,
-        full_name,
-        avatar_color
-      ),
-      attachments (
-        id,
-        message_id,
-        message_type,
-        url,
-        file_type,
-        file_name
-      )
-    `)
-    .eq("channel_id", req.params.channelId)
-    .order("created_at", { ascending: false })
-    .limit(limit);
+        content,
+        created_at,
+        edited_at,
+        sender:profiles!messages_sender_id_fkey (
+          id,
+          username,
+          full_name,
+          avatar_color
+        )
+      `)
+      .eq("channel_id", req.params.channelId)
+      .order("created_at", { ascending: false });
 
+    if (error) return res.status(500).json({ error: error.message });
+    if (!messages || messages.length === 0) return res.json([]);
 
-  if (before) {
-    query = query.lt("created_at", before);
+    // 2. Fetch attachments separately using message IDs
+    const messageIds = messages.map((m) => m.id);
+    const { data: attachments, error: attError } = await supabase
+      .from("attachments")
+      .select("id, message_id, message_type, url, file_type, file_name")
+      .in("message_id", messageIds);
+
+    if (attError) return res.status(500).json({ error: attError.message });
+
+    // 3. Map attachments back to their respective messages safely in code
+    const attachmentsByMessageId = (attachments || []).reduce((acc, att) => {
+      if (!acc[att.message_id]) acc[att.message_id] = [];
+      acc[att.message_id].push(att);
+      return acc;
+    }, {});
+
+    const result = messages.map((m) => ({
+      ...m,
+      attachments: attachmentsByMessageId[m.id] || []
+    }));
+
+    res.json(result.reverse());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-
-  const { data: messages, error } = await query;
-
-
-  if(error){
-    return res.status(500).json({
-      error: error.message
-    });
-  }
-
-
-  res.json(messages.reverse());
-
 });
-
-
 
 // SEND CHANNEL MESSAGE
 // /api/messages/:channelId
-router.post("/:channelId", requireAuth, async(req,res)=>{
+router.post("/:channelId", requireAuth, async (req, res) => {
+  try {
+    const content =
+      typeof req.body.content === "string"
+        ? req.body.content.trim()
+        : "";
 
-  const content =
-    typeof req.body.content === "string"
-    ? req.body.content.trim()
-    : "";
+    const attachmentsData = req.body.attachments || [];
 
-  const attachmentsData = req.body.attachments || [];
+    // 1. Insert the message first
+    const { data: message, error: messageError } = await supabase
+      .from("messages")
+      .insert({
+        channel_id: req.params.channelId,
+        sender_id: req.user.id,
+        content
+      })
+      .select()
+      .single();
 
-  // 1. Insert the message first to generate the real database UUID
-  const {data: message, error: messageError} = await supabase
-    .from("messages")
-    .insert({
-      channel_id: req.params.channelId,
-      sender_id: req.user.id,
-      content
-    })
-    .select()
-    .single();
-
-  if(messageError){
-    return res.status(500).json({
-      error: messageError.message
-    });
-  }
-
-  // 2. If there are attachments, insert them using the new message's real id
-  if (attachmentsData.length > 0) {
-    const formattedAttachments = attachmentsData.map(att => ({
-      message_id: message.id, // Securely mapped to the real parent message ID
-      message_type: att.message_type || "channel",
-      url: att.url,
-      file_type: att.file_type,
-      file_name: att.file_name
-    }));
-
-    const { error: attError } = await supabase
-      .from("attachments")
-      .insert(formattedAttachments);
-
-    if (attError) {
-      return res.status(500).json({
-        error: attError.message
-      });
+    if (messageError) {
+      return res.status(500).json({ error: messageError.message });
     }
-  }
 
-  // 3. Fetch and return the fully populated message with sender profiles and attachments
-  const {data, error} = await supabase
-    .from("messages")
-    .select(`
-      id,
-      content,
-      created_at,
-      edited_at,
-      sender:profiles!messages_sender_id_fkey (
-        id,
-        username,
-        full_name,
-        avatar_color
-      ),
-      attachments (
-        id,
-        message_id,
-        message_type,
-        url,
-        file_type,
-        file_name
-      )
-    `)
-    .eq("id", message.id)
-    .single();
+    // 2. Insert attachments if any exist
+    if (attachmentsData.length > 0) {
+      const formattedAttachments = attachmentsData.map((att) => ({
+        message_id: message.id,
+        message_type: att.message_type || "channel",
+        url: att.url,
+        file_type: att.file_type,
+        file_name: att.file_name
+      }));
 
-  if(error){
-    return res.status(500).json({
-      error: error.message
+      const { error: attError } = await supabase
+        .from("attachments")
+        .insert(formattedAttachments);
+
+      if (attError) {
+        return res.status(500).json({ error: attError.message });
+      }
+    }
+
+    // 3. Fetch the newly created message with profile and attachments safely
+    const { data: createdMsg, error: fetchError } = await supabase
+      .from("messages")
+      .select(`
+        id,
+        content,
+        created_at,
+        edited_at,
+        sender:profiles!messages_sender_id_fkey (
+          id,
+          username,
+          full_name,
+          avatar_color
+        )
+      `)
+      .eq("id", message.id)
+      .single();
+
+    if (fetchError) {
+      return res.status(500).json({ error: fetchError.message });
+    }
+
+    const { data: createdAttachments } = await supabase
+      .from("attachments")
+      .select("id, message_id, message_type, url, file_type, file_name")
+      .eq("message_id", message.id);
+
+    return res.status(201).json({
+      ...createdMsg,
+      attachments: createdAttachments || []
     });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
-
-  res.status(201).json(data);
-
 });
 
-
-
 // EDIT CHANNEL MESSAGE
-// /api/messages/:channelId/:messageId
-router.patch("/:channelId/:messageId", requireAuth, async(req,res)=>{
+router.patch("/:channelId/:messageId", requireAuth, async (req, res) => {
+  const { content } = req.body;
 
-
-  const {content}=req.body;
-
-
-  const {data,error}=await supabase
+  const { data, error } = await supabase
     .from("messages")
     .update({
       content,
-      edited_at:new Date().toISOString()
+      edited_at: new Date().toISOString()
     })
-    .eq("id",req.params.messageId)
-    .eq("sender_id",req.user.id)
+    .eq("id", req.params.messageId)
+    .eq("sender_id", req.user.id)
     .select()
     .single();
 
-
-
-  if(error){
-    return res.status(500).json({
-      error:error.message
-    });
+  if (error) {
+    return res.status(500).json({ error: error.message });
   }
 
-
-  if(!data){
-    return res.status(403).json({
-      error:"Not allowed"
-    });
+  if (!data) {
+    return res.status(403).json({ error: "Not allowed" });
   }
-
 
   res.json(data);
-
 });
-
-
-
 
 // DELETE CHANNEL MESSAGE
-// /api/messages/:channelId/:messageId
-router.delete("/:channelId/:messageId", requireAuth, async(req,res)=>{
-
-
-  const {error}=await supabase
+router.delete("/:channelId/:messageId", requireAuth, async (req, res) => {
+  const { error } = await supabase
     .from("messages")
     .delete()
-    .eq("id",req.params.messageId)
-    .eq("sender_id",req.user.id);
+    .eq("id", req.params.messageId)
+    .eq("sender_id", req.user.id);
 
-
-
-  if(error){
-    return res.status(500).json({
-      error:error.message
-    });
+  if (error) {
+    return res.status(500).json({ error: error.message });
   }
 
-
-  res.json({
-    success:true
-  });
-
+  res.json({ success: true });
 });
 
-
-
-
 // REACTION
-// /api/messages/:channelId/:messageId/react
-router.post("/:channelId/:messageId/react", requireAuth, async(req,res)=>{
+router.post("/:channelId/:messageId/react", requireAuth, async (req, res) => {
+  const { emoji } = req.body;
 
-
-  const {emoji}=req.body;
-
-
-  const {data:existing}=await supabase
+  const { data: existing } = await supabase
     .from("reactions")
     .select("id")
-    .eq("message_id",req.params.messageId)
-    .eq("user_id",req.user.id)
-    .eq("emoji",emoji)
+    .eq("message_id", req.params.messageId)
+    .eq("user_id", req.user.id)
+    .eq("emoji", emoji)
     .maybeSingle();
 
-
-
-  if(existing){
-
-    await supabase
-      .from("reactions")
-      .delete()
-      .eq("id",existing.id);
-
-
-    return res.json({
-      removed:true
-    });
-
+  if (existing) {
+    await supabase.from("reactions").delete().eq("id", existing.id);
+    return res.json({ removed: true });
   }
 
-
-
-  const {data,error}=await supabase
+  const { data, error } = await supabase
     .from("reactions")
     .insert({
-      message_id:req.params.messageId,
-      message_type:"channel",
-      user_id:req.user.id,
+      message_id: req.params.messageId,
+      message_type: "channel",
+      user_id: req.user.id,
       emoji
     })
     .select()
     .single();
 
-
-
-  if(error){
-    return res.status(500).json({
-      error:error.message
-    });
+  if (error) {
+    return res.status(500).json({ error: error.message });
   }
 
-
   res.status(201).json(data);
-
 });
-
-
 
 export default router;
