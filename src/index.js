@@ -14,11 +14,10 @@ dotenv.config();
 
 const app = express();
 
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:5174",
-  process.env.CLIENT_URL,
-];
+console.log("Starting server...");
+console.log("PORT:", process.env.PORT || 5000);
+console.log("SUPABASE_URL:", process.env.SUPABASE_URL ? "Set" : "Missing");
+console.log("CLIENT_URL:", process.env.CLIENT_URL || "Not set");
 
 app.use(
   cors({
@@ -31,13 +30,19 @@ app.use(express.json());
 
 // Health check
 app.get("/api/health", (req, res) => {
+  console.log("Health check called");
   res.json({
     status: "ok",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    env: {
+      supabase: process.env.SUPABASE_URL ? "Set" : "Missing",
+      port: process.env.PORT || 5000
+    }
   });
 });
 
-// Routes - Make sure all are prefixed with /api
+// Routes
+console.log("Registering routes...");
 app.use("/api/channels", channelsRouter);
 app.use("/api/messages", messagesRouter);
 app.use("/api/dm", dmRouter);
@@ -45,12 +50,21 @@ app.use("/api/profiles", profilesRouter);
 app.use("/api/upload", uploadRouter);
 app.use("/api/search", searchRouter);
 app.use("/api/notifications", notificationsRouter);
+console.log("Routes registered");
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error("Global error handler:", err);
+  res.status(500).json({ 
+    error: "Internal server error",
+    message: err.message 
+  });
+});
 
 // Start server
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📁 Upload route: http://localhost:${PORT}/api/upload`);
-  console.log(`🖼️  Avatar upload: http://localhost:${PORT}/api/upload/avatar`);
+  console.log(`✅ Health check: http://localhost:${PORT}/api/health`);
 });
