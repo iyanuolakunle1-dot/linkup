@@ -7,7 +7,6 @@ const router = express.Router();
 // GET /api/messages/:channelId
 router.get("/:channelId", requireAuth, async (req, res) => {
   try {
-    // 1. Fetch messages with reply_to_message_id
     const { data: messages, error } = await supabase
       .from("messages")
       .select(`
@@ -16,6 +15,7 @@ router.get("/:channelId", requireAuth, async (req, res) => {
         created_at,
         edited_at,
         reply_to_message_id,
+        read_at,
         sender:profiles!messages_sender_id_fkey (
           id,
           username,
@@ -32,10 +32,14 @@ router.get("/:channelId", requireAuth, async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
     
-    if (!messages || messages.length === 0) return res.json([]);
+    if (!messages || messages.length === 0) {
+      return res.json([]);
+    }
 
-    // 2. Fetch attachments separately using message IDs
+    // Get all message IDs for attachments
     const messageIds = messages.map((m) => m.id);
+    
+    // Fetch attachments
     const { data: attachments, error: attError } = await supabase
       .from("attachments")
       .select("id, message_id, message_type, url, file_type, file_name")
@@ -46,21 +50,21 @@ router.get("/:channelId", requireAuth, async (req, res) => {
       return res.status(500).json({ error: attError.message });
     }
 
-    // 3. Map attachments back to their respective messages
+    // Group attachments by message_id
     const attachmentsByMessageId = (attachments || []).reduce((acc, att) => {
       if (!acc[att.message_id]) acc[att.message_id] = [];
       acc[att.message_id].push(att);
       return acc;
     }, {});
 
-    // 4. Fetch reply_to_message data for messages that have it
-    const replyMessageIds = messages
+    // Get reply message data
+    const replyIds = messages
       .filter(m => m.reply_to_message_id)
       .map(m => m.reply_to_message_id);
 
     let replyMessages = [];
-    if (replyMessageIds.length > 0) {
-      const { data: replies, error: replyError } = await supabase
+    if (replyIds.length > 0) {
+      const { data: replies } = await supabase
         .from("messages")
         .select(`
           id,
@@ -73,26 +77,24 @@ router.get("/:channelId", requireAuth, async (req, res) => {
             avatar_url
           )
         `)
-        .in("id", replyMessageIds);
-
-      if (!replyError) {
-        replyMessages = replies || [];
-      }
+        .in("id", replyIds);
+      
+      replyMessages = replies || [];
     }
 
-    // 5. Map reply messages by ID
-    const replyMessagesById = replyMessages.reduce((acc, reply) => {
+    const replyMap = replyMessages.reduce((acc, reply) => {
       acc[reply.id] = reply;
       return acc;
     }, {});
 
-    // 6. Build final result with reply_to_message data
+    // Build final response
     const result = messages.map((m) => ({
       ...m,
       attachments: attachmentsByMessageId[m.id] || [],
-      reply_to_message: m.reply_to_message_id ? replyMessagesById[m.reply_to_message_id] || null : null
+      reply_to_message: m.reply_to_message_id ? replyMap[m.reply_to_message_id] || null : null
     }));
 
+    // Reverse to get chronological order (oldest first)
     res.json(result.reverse());
   } catch (err) {
     console.error("Route error:", err);
@@ -100,18 +102,14 @@ router.get("/:channelId", requireAuth, async (req, res) => {
   }
 });
 
-// SEND CHANNEL MESSAGE
+// POST - Send message
 router.post("/:channelId", requireAuth, async (req, res) => {
   try {
-    const content =
-      typeof req.body.content === "string"
-        ? req.body.content.trim()
-        : "";
-
+    const content = typeof req.body.content === "string" ? req.body.content.trim() : "";
     const attachmentsData = req.body.attachments || [];
     const replyToMessageId = req.body.reply_to_message_id || null;
 
-    // 1. Insert the message with reply_to_message_id
+    // Insert message
     const { data: message, error: messageError } = await supabase
       .from("messages")
       .insert({
@@ -128,7 +126,7 @@ router.post("/:channelId", requireAuth, async (req, res) => {
       return res.status(500).json({ error: messageError.message });
     }
 
-    // 2. Insert attachments if any exist
+    // Insert attachments if any
     if (attachmentsData.length > 0) {
       const formattedAttachments = attachmentsData.map((att) => ({
         message_id: message.id,
@@ -144,11 +142,10 @@ router.post("/:channelId", requireAuth, async (req, res) => {
 
       if (attError) {
         console.error("Attachment insert error:", attError);
-        return res.status(500).json({ error: attError.message });
       }
     }
 
-    // 3. Fetch the newly created message with profile and attachments
+    // Fetch the complete message with sender info
     const { data: createdMsg, error: fetchError } = await supabase
       .from("messages")
       .select(`
@@ -157,6 +154,7 @@ router.post("/:channelId", requireAuth, async (req, res) => {
         created_at,
         edited_at,
         reply_to_message_id,
+        read_at,
         sender:profiles!messages_sender_id_fkey (
           id,
           username,
@@ -173,15 +171,16 @@ router.post("/:channelId", requireAuth, async (req, res) => {
       return res.status(500).json({ error: fetchError.message });
     }
 
+    // Get attachments for the message
     const { data: createdAttachments } = await supabase
       .from("attachments")
       .select("id, message_id, message_type, url, file_type, file_name")
       .eq("message_id", message.id);
 
-    // 4. Fetch reply_to_message data if it exists
+    // Get reply to message data if it exists
     let replyToMessage = null;
     if (replyToMessageId) {
-      const { data: replyData, error: replyError } = await supabase
+      const { data: replyData } = await supabase
         .from("messages")
         .select(`
           id,
@@ -196,10 +195,8 @@ router.post("/:channelId", requireAuth, async (req, res) => {
         `)
         .eq("id", replyToMessageId)
         .single();
-
-      if (!replyError) {
-        replyToMessage = replyData;
-      }
+      
+      replyToMessage = replyData;
     }
 
     return res.status(201).json({
@@ -213,14 +210,115 @@ router.post("/:channelId", requireAuth, async (req, res) => {
   }
 });
 
-// EDIT CHANNEL MESSAGE
+// ==================== READ RECEIPTS ROUTES (MUST COME BEFORE /:channelId/:messageId) ====================
+
+// MARK CHANNEL MESSAGE AS READ
+router.post("/:channelId/:messageId/read", requireAuth, async (req, res) => {
+  try {
+    const { channelId, messageId } = req.params;
+    const userId = req.user.id;
+
+    console.log(`📖 Marking message ${messageId} as read by user ${userId}`);
+
+    // Check if already read
+    const { data: existing, error: checkError } = await supabase
+      .from("message_reads")
+      .select("id")
+      .eq("message_id", messageId)
+      .eq("user_id", userId)
+      .eq("message_type", "channel")
+      .maybeSingle();
+
+    if (checkError) {
+      console.error("Check error:", checkError);
+      return res.status(500).json({ error: checkError.message });
+    }
+
+    if (existing) {
+      return res.json({ success: true, alreadyRead: true });
+    }
+
+    // Mark as read
+    const { error: insertError } = await supabase
+      .from("message_reads")
+      .insert({
+        message_id: messageId,
+        message_type: "channel",
+        user_id: userId,
+        read_at: new Date().toISOString()
+      });
+
+    if (insertError) {
+      console.error("Insert error:", insertError);
+      return res.status(500).json({ error: insertError.message });
+    }
+
+    // Update the message's read_at field
+    const { error: updateError } = await supabase
+      .from("messages")
+      .update({ read_at: new Date().toISOString() })
+      .eq("id", messageId);
+
+    if (updateError) {
+      console.error("Update error:", updateError);
+    }
+
+    console.log(`✅ Message ${messageId} marked as read`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error marking message as read:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET READ STATUS FOR A MESSAGE
+router.get("/:channelId/:messageId/read-status", requireAuth, async (req, res) => {
+  try {
+    const { messageId } = req.params;
+
+    const { data: reads, error } = await supabase
+      .from("message_reads")
+      .select(`
+        user_id,
+        read_at,
+        profiles:user_id (
+          id,
+          full_name,
+          username
+        )
+      `)
+      .eq("message_id", messageId)
+      .eq("message_type", "channel");
+
+    if (error) {
+      console.error("Read status error:", error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json({
+      readCount: reads?.length || 0,
+      readers: reads || []
+    });
+  } catch (err) {
+    console.error("Error getting read status:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== MESSAGE CRUD ROUTES ====================
+
+// PATCH - Edit message
 router.patch("/:channelId/:messageId", requireAuth, async (req, res) => {
   const { content } = req.body;
+
+  if (!content || !content.trim()) {
+    return res.status(400).json({ error: "Content is required" });
+  }
 
   const { data, error } = await supabase
     .from("messages")
     .update({
-      content,
+      content: content.trim(),
       edited_at: new Date().toISOString()
     })
     .eq("id", req.params.messageId)
@@ -240,7 +338,7 @@ router.patch("/:channelId/:messageId", requireAuth, async (req, res) => {
   res.json(data);
 });
 
-// DELETE CHANNEL MESSAGE
+// DELETE - Delete message
 router.delete("/:channelId/:messageId", requireAuth, async (req, res) => {
   const { error } = await supabase
     .from("messages")
@@ -256,10 +354,15 @@ router.delete("/:channelId/:messageId", requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
-// REACTION
+// POST - Add reaction
 router.post("/:channelId/:messageId/react", requireAuth, async (req, res) => {
   const { emoji } = req.body;
 
+  if (!emoji) {
+    return res.status(400).json({ error: "Emoji is required" });
+  }
+
+  // Check if reaction exists
   const { data: existing } = await supabase
     .from("reactions")
     .select("id")
@@ -269,10 +372,12 @@ router.post("/:channelId/:messageId/react", requireAuth, async (req, res) => {
     .maybeSingle();
 
   if (existing) {
+    // Remove reaction
     await supabase.from("reactions").delete().eq("id", existing.id);
     return res.json({ removed: true });
   }
 
+  // Add reaction
   const { data, error } = await supabase
     .from("reactions")
     .insert({
