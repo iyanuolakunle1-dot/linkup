@@ -7,7 +7,7 @@ const router = express.Router();
 // GET /api/messages/:channelId
 router.get("/:channelId", requireAuth, async (req, res) => {
   try {
-    // 1. Fetch messages - REMOVE THE COMMENT FROM THE SELECT STRING
+    // 1. Fetch messages with reply_to_message_id
     const { data: messages, error } = await supabase
       .from("messages")
       .select(`
@@ -15,6 +15,7 @@ router.get("/:channelId", requireAuth, async (req, res) => {
         content,
         created_at,
         edited_at,
+        reply_to_message_id,
         sender:profiles!messages_sender_id_fkey (
           id,
           username,
@@ -52,9 +53,44 @@ router.get("/:channelId", requireAuth, async (req, res) => {
       return acc;
     }, {});
 
+    // 4. Fetch reply_to_message data for messages that have it
+    const replyMessageIds = messages
+      .filter(m => m.reply_to_message_id)
+      .map(m => m.reply_to_message_id);
+
+    let replyMessages = [];
+    if (replyMessageIds.length > 0) {
+      const { data: replies, error: replyError } = await supabase
+        .from("messages")
+        .select(`
+          id,
+          content,
+          sender:profiles!messages_sender_id_fkey (
+            id,
+            username,
+            full_name,
+            avatar_color,
+            avatar_url
+          )
+        `)
+        .in("id", replyMessageIds);
+
+      if (!replyError) {
+        replyMessages = replies || [];
+      }
+    }
+
+    // 5. Map reply messages by ID
+    const replyMessagesById = replyMessages.reduce((acc, reply) => {
+      acc[reply.id] = reply;
+      return acc;
+    }, {});
+
+    // 6. Build final result with reply_to_message data
     const result = messages.map((m) => ({
       ...m,
-      attachments: attachmentsByMessageId[m.id] || []
+      attachments: attachmentsByMessageId[m.id] || [],
+      reply_to_message: m.reply_to_message_id ? replyMessagesById[m.reply_to_message_id] || null : null
     }));
 
     res.json(result.reverse());
@@ -73,14 +109,16 @@ router.post("/:channelId", requireAuth, async (req, res) => {
         : "";
 
     const attachmentsData = req.body.attachments || [];
+    const replyToMessageId = req.body.reply_to_message_id || null;
 
-    // 1. Insert the message first
+    // 1. Insert the message with reply_to_message_id
     const { data: message, error: messageError } = await supabase
       .from("messages")
       .insert({
         channel_id: req.params.channelId,
         sender_id: req.user.id,
-        content
+        content,
+        reply_to_message_id: replyToMessageId
       })
       .select()
       .single();
@@ -118,6 +156,7 @@ router.post("/:channelId", requireAuth, async (req, res) => {
         content,
         created_at,
         edited_at,
+        reply_to_message_id,
         sender:profiles!messages_sender_id_fkey (
           id,
           username,
@@ -139,9 +178,34 @@ router.post("/:channelId", requireAuth, async (req, res) => {
       .select("id, message_id, message_type, url, file_type, file_name")
       .eq("message_id", message.id);
 
+    // 4. Fetch reply_to_message data if it exists
+    let replyToMessage = null;
+    if (replyToMessageId) {
+      const { data: replyData, error: replyError } = await supabase
+        .from("messages")
+        .select(`
+          id,
+          content,
+          sender:profiles!messages_sender_id_fkey (
+            id,
+            username,
+            full_name,
+            avatar_color,
+            avatar_url
+          )
+        `)
+        .eq("id", replyToMessageId)
+        .single();
+
+      if (!replyError) {
+        replyToMessage = replyData;
+      }
+    }
+
     return res.status(201).json({
       ...createdMsg,
-      attachments: createdAttachments || []
+      attachments: createdAttachments || [],
+      reply_to_message: replyToMessage
     });
   } catch (err) {
     console.error("Route error:", err);
