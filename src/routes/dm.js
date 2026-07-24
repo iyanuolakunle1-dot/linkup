@@ -38,7 +38,7 @@ router.get("/threads", requireAuth, async (req, res) => {
 
         const { data: lastMessage } = await supabase
           .from("dm_messages")
-          .select("content, created_at, sender_id, id")
+          .select("content, created_at, sender_id, id, read_at")
           .eq("thread_id", thread.id)
           .order("created_at", { ascending: false })
           .limit(1)
@@ -147,16 +147,42 @@ router.patch("/threads/:threadId/read", requireAuth, async (req, res) => {
 });
 
 // ============================================
-// DM MESSAGE ROUTES
+// DM MESSAGE READ RECEIPT ROUTES
 // ============================================
 
-// POST /api/dm/messages/:messageId/read - Mark a single DM message as read
+// MARK DM MESSAGE AS READ - FIXED VERSION
 router.post("/messages/:messageId/read", requireAuth, async (req, res) => {
   try {
     const { messageId } = req.params;
     const userId = req.user.id;
 
     console.log(`📖 Marking DM message ${messageId} as read by user ${userId}`);
+
+    // First, verify this message exists and belongs to a thread the user is in
+    const { data: message, error: msgError } = await supabase
+      .from("dm_messages")
+      .select(`
+        id,
+        thread_id,
+        sender_id,
+        dm_threads!inner (
+          user_one,
+          user_two
+        )
+      `)
+      .eq("id", messageId)
+      .single();
+
+    if (msgError || !message) {
+      console.error("Message not found:", msgError);
+      return res.status(404).json({ error: "Message not found" });
+    }
+
+    // Check if user is part of this thread
+    const thread = message.dm_threads;
+    if (thread.user_one !== userId && thread.user_two !== userId) {
+      return res.status(403).json({ error: "Not authorized to read this message" });
+    }
 
     // Check if already read
     const { data: existing, error: checkError } = await supabase
@@ -176,7 +202,7 @@ router.post("/messages/:messageId/read", requireAuth, async (req, res) => {
       return res.json({ success: true, alreadyRead: true });
     }
 
-    // Mark as read
+    // Mark as read - insert into message_reads
     const { error: insertError } = await supabase
       .from("message_reads")
       .insert({
@@ -191,7 +217,7 @@ router.post("/messages/:messageId/read", requireAuth, async (req, res) => {
       return res.status(500).json({ error: insertError.message });
     }
 
-    // Update dm_message read_at
+    // Update the dm_message's read_at field
     const { error: updateError } = await supabase
       .from("dm_messages")
       .update({ read_at: new Date().toISOString() })
@@ -199,6 +225,7 @@ router.post("/messages/:messageId/read", requireAuth, async (req, res) => {
 
     if (updateError) {
       console.error("Update error:", updateError);
+      // Don't fail the request
     }
 
     console.log(`✅ DM Message ${messageId} marked as read`);
@@ -208,6 +235,10 @@ router.post("/messages/:messageId/read", requireAuth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ============================================
+// DM MESSAGE ROUTES
+// ============================================
 
 // GET /api/dm/threads/:threadId/messages - Get messages for a thread
 router.get("/threads/:threadId/messages", requireAuth, async (req, res) => {
