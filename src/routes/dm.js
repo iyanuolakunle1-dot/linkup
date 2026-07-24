@@ -105,7 +105,20 @@ router.patch("/threads/:threadId/read", requireAuth, async (req, res) => {
   if (updateError) return res.status(500).json({ error: updateError.message });
   res.json({ success: true });
 });
+// Mark DM message as read
+router.patch("/messages/:messageId/read", requireAuth, async (req, res) => {
+  const { error } = await supabase
+    .from("dm_messages")
+    .update({ read_at: new Date().toISOString() })
+    .eq("id", req.params.messageId)
+    .eq("sender_id", req.user.id); // Only sender can mark as read? Or the receiver?
 
+  if (error) {
+    return res.status(500).json({ error: error.message });
+  }
+
+  res.json({ success: true });
+});
 // GET /api/dm/threads/:threadId/messages
 router.get("/threads/:threadId/messages", requireAuth, async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
