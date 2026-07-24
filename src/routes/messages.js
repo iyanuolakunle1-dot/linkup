@@ -7,22 +7,24 @@ const router = express.Router();
 router.get("/:channelId", requireAuth, async (req, res) => {
   try {
     // 1. Fetch messages independently without any foreign table joins
-    const { data: messages, error } = await supabase
-      .from("messages")
-      .select(`
-        id,
-        content,
-        created_at,
-        edited_at,
-        sender:profiles!messages_sender_id_fkey (
-          id,
-          username,
-          full_name,
-          avatar_color
-        )
-      `)
-      .eq("channel_id", req.params.channelId)
-      .order("created_at", { ascending: false });
+// In the GET route, make sure to select avatar_url
+const { data: messages, error } = await supabase
+  .from("messages")
+  .select(`
+    id,
+    content,
+    created_at,
+    edited_at,
+    sender:profiles!messages_sender_id_fkey (
+      id,
+      username,
+      full_name,
+      avatar_color,
+      avatar_url  // Make sure this is included
+    )
+  `)
+  .eq("channel_id", req.params.channelId)
+  .order("created_at", { ascending: false });
 
     if (error) return res.status(500).json({ error: error.message });
     if (!messages || messages.length === 0) return res.json([]);
