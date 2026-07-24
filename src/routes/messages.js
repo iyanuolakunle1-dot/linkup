@@ -4,29 +4,33 @@ import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
+// GET /api/messages/:channelId
 router.get("/:channelId", requireAuth, async (req, res) => {
   try {
-    // 1. Fetch messages independently without any foreign table joins
-// In the GET route, make sure to select avatar_url
-const { data: messages, error } = await supabase
-  .from("messages")
-  .select(`
-    id,
-    content,
-    created_at,
-    edited_at,
-    sender:profiles!messages_sender_id_fkey (
-      id,
-      username,
-      full_name,
-      avatar_color,
-      avatar_url  // Make sure this is included
-    )
-  `)
-  .eq("channel_id", req.params.channelId)
-  .order("created_at", { ascending: false });
+    // 1. Fetch messages - REMOVE THE COMMENT FROM THE SELECT STRING
+    const { data: messages, error } = await supabase
+      .from("messages")
+      .select(`
+        id,
+        content,
+        created_at,
+        edited_at,
+        sender:profiles!messages_sender_id_fkey (
+          id,
+          username,
+          full_name,
+          avatar_color,
+          avatar_url
+        )
+      `)
+      .eq("channel_id", req.params.channelId)
+      .order("created_at", { ascending: false });
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+      console.error("Supabase error:", error);
+      return res.status(500).json({ error: error.message });
+    }
+    
     if (!messages || messages.length === 0) return res.json([]);
 
     // 2. Fetch attachments separately using message IDs
@@ -36,9 +40,12 @@ const { data: messages, error } = await supabase
       .select("id, message_id, message_type, url, file_type, file_name")
       .in("message_id", messageIds);
 
-    if (attError) return res.status(500).json({ error: attError.message });
+    if (attError) {
+      console.error("Attachment error:", attError);
+      return res.status(500).json({ error: attError.message });
+    }
 
-    // 3. Map attachments back to their respective messages safely in code
+    // 3. Map attachments back to their respective messages
     const attachmentsByMessageId = (attachments || []).reduce((acc, att) => {
       if (!acc[att.message_id]) acc[att.message_id] = [];
       acc[att.message_id].push(att);
@@ -52,12 +59,12 @@ const { data: messages, error } = await supabase
 
     res.json(result.reverse());
   } catch (err) {
+    console.error("Route error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 // SEND CHANNEL MESSAGE
-// /api/messages/:channelId
 router.post("/:channelId", requireAuth, async (req, res) => {
   try {
     const content =
@@ -79,6 +86,7 @@ router.post("/:channelId", requireAuth, async (req, res) => {
       .single();
 
     if (messageError) {
+      console.error("Message insert error:", messageError);
       return res.status(500).json({ error: messageError.message });
     }
 
@@ -97,11 +105,12 @@ router.post("/:channelId", requireAuth, async (req, res) => {
         .insert(formattedAttachments);
 
       if (attError) {
+        console.error("Attachment insert error:", attError);
         return res.status(500).json({ error: attError.message });
       }
     }
 
-    // 3. Fetch the newly created message with profile and attachments safely
+    // 3. Fetch the newly created message with profile and attachments
     const { data: createdMsg, error: fetchError } = await supabase
       .from("messages")
       .select(`
@@ -113,13 +122,15 @@ router.post("/:channelId", requireAuth, async (req, res) => {
           id,
           username,
           full_name,
-          avatar_color
+          avatar_color,
+          avatar_url
         )
       `)
       .eq("id", message.id)
       .single();
 
     if (fetchError) {
+      console.error("Fetch error:", fetchError);
       return res.status(500).json({ error: fetchError.message });
     }
 
@@ -133,6 +144,7 @@ router.post("/:channelId", requireAuth, async (req, res) => {
       attachments: createdAttachments || []
     });
   } catch (err) {
+    console.error("Route error:", err);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -153,6 +165,7 @@ router.patch("/:channelId/:messageId", requireAuth, async (req, res) => {
     .single();
 
   if (error) {
+    console.error("Edit error:", error);
     return res.status(500).json({ error: error.message });
   }
 
@@ -172,6 +185,7 @@ router.delete("/:channelId/:messageId", requireAuth, async (req, res) => {
     .eq("sender_id", req.user.id);
 
   if (error) {
+    console.error("Delete error:", error);
     return res.status(500).json({ error: error.message });
   }
 
@@ -207,6 +221,7 @@ router.post("/:channelId/:messageId/react", requireAuth, async (req, res) => {
     .single();
 
   if (error) {
+    console.error("Reaction error:", error);
     return res.status(500).json({ error: error.message });
   }
 

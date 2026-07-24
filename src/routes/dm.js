@@ -114,13 +114,23 @@ router.get("/threads/:threadId/messages", requireAuth, async (req, res) => {
     .from("dm_messages")
     .select(`
       id, content, created_at, read_at, edited_at,
-      sender:profiles!dm_messages_sender_id_fkey (id, username, full_name, avatar_color)
+      sender:profiles!dm_messages_sender_id_fkey (
+        id, 
+        username, 
+        full_name, 
+        avatar_color,
+        avatar_url
+      )
     `)
     .eq("thread_id", req.params.threadId)
     .order("created_at", { ascending: false })
     .limit(limit);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) {
+    console.error("DM messages error:", error);
+    return res.status(500).json({ error: error.message });
+  }
+  
   if (!messages || messages.length === 0) return res.json([]);
 
   const messageIds = messages.map((m) => m.id);
@@ -130,7 +140,10 @@ router.get("/threads/:threadId/messages", requireAuth, async (req, res) => {
     .eq("message_type", "dm")
     .in("message_id", messageIds);
 
-  if (attError) return res.status(500).json({ error: attError.message });
+  if (attError) {
+    console.error("Attachment error:", attError);
+    return res.status(500).json({ error: attError.message });
+  }
 
   const attachmentsByMessageId = (attachments || []).reduce((acc, att) => {
     if (!acc[att.message_id]) acc[att.message_id] = [];
